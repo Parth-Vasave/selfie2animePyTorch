@@ -77,6 +77,9 @@ def convert(mxnet_params_path, output_path):
     model = ResnetGenerator(use_spectral_norm=False)
     target_sd = model.state_dict()
 
+    # Collect weights and u vectors separately, then normalize
+    raw_weights = {}  # base_key -> weight tensor
+    u_vectors = {}    # base_key -> u tensor (1, out_channels)
     new_sd = {}
 
     for mx_key, mx_arr in mx_params.items():
@@ -86,18 +89,38 @@ def convert(mxnet_params_path, output_path):
         clean = clean.replace('._net.', '.net.')
 
         if clean.endswith('._u'):
-            # Skip spectral norm u vectors — not needed without spectral norm
-            continue
+            base = clean[:-3]  # remove ._u
+            u_vectors[base] = torch.from_numpy(mx_arr)  # keep as (1, N)
         elif clean.endswith('._weight'):
-            # Map _weight -> weight (plain conv weight, no spectral norm)
             base = clean[:-8]  # remove ._weight
-            pt_key = base + '.weight'
-            new_sd[pt_key] = torch.from_numpy(mx_arr)
+            raw_weights[base] = torch.from_numpy(mx_arr)
         else:
             # CAM layers: cam._gap_linear.weight -> cam.gap_linear.weight
             clean = clean.replace('._', '.')
-            pt_key = clean
-            new_sd[pt_key] = torch.from_numpy(mx_arr)
+            new_sd[clean] = torch.from_numpy(mx_arr)
+
+    # Apply spectral normalization: W_normalized = W / sigma
+    # MXNet stores the raw (unnormalized) weight and u vector.
+    # MXNet's forward does exactly 1 power iteration step using the saved u,
+    # so we replicate that here to bake the normalization into the weight.
+    print("\nApplying spectral normalization to weights...")
+    for base_key in raw_weights:
+        weight = raw_weights[base_key]
+        if base_key in u_vectors:
+            u = u_vectors[base_key]  # (1, out_channels)
+            w_mat = weight.reshape(weight.shape[0], -1)  # (out, in*k*k)
+            # MXNet 1-step power iteration:
+            # v = L2Norm(u @ W)
+            v = torch.mm(u, w_mat)
+            v = v / v.norm()
+            # u_new = L2Norm(v @ W^T)
+            u_new = torch.mm(v, w_mat.t())
+            u_new = u_new / u_new.norm()
+            # sigma = sum(u_new @ W * v)
+            sigma = torch.sum(torch.mm(u_new, w_mat) * v)
+            weight = weight / sigma
+            print(f"  {base_key}: sigma={sigma.item():.4f}")
+        new_sd[base_key + '.weight'] = weight
 
     # Verify all keys match
     missing = set(target_sd.keys()) - set(new_sd.keys())
