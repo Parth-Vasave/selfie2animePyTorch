@@ -1,7 +1,4 @@
-"""AnimeGANv2 Generator - lightweight anime style transfer model.
-
-Based on https://github.com/bryandlee/animegan2-pytorch
-"""
+"""Style transfer generator for selfie2anime CycleGAN."""
 
 import torch
 import torch.nn as nn
