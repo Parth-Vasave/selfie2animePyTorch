@@ -1,12 +1,24 @@
 # selfie2animePyTorch
 
-Convert selfie photos to anime-style images using a CycleGAN model implemented in PyTorch.
+Convert selfie photos to anime-style images using deep learning with PyTorch.
 
 ## Quick Start (Google Colab)
 
 Open `selfie2anime_colab.ipynb` in Google Colab to try it instantly — no local setup needed.
 
-## Local Usage
+## Web Dashboard
+
+Run the web dashboard locally for a drag-and-drop browser experience:
+
+```bash
+cd cycle_gan
+pip install -r requirements.txt
+python app.py --port 8080 --gpu
+```
+
+Then open http://localhost:8080 in your browser.
+
+## CLI Usage
 
 ### Setup
 ```bash
@@ -32,18 +44,13 @@ python train.py --dataset selfie2anime --gpu
 
 ```
 cycle_gan/
-  pix2pix_gan.py     # ResnetGenerator + PatchDiscriminator with CAM & spectral norm
-  train.py           # Training loop
-  test.py            # Inference & visualization
-  server.py          # HTTP demo server
-  dataset.py         # Dataset loading & augmentation
-  image_pool.py      # Image buffer for training stability
-  convert_weights.py # MXNet .params -> PyTorch .pth converter
-  model/             # Pre-trained weights
+  app.py               # Flask web dashboard
+  templates/index.html  # Dashboard frontend
+  style_generator.py    # Generator architecture
+  pix2pix_gan.py        # CycleGAN components (training)
+  train.py              # Training loop
+  test.py               # CLI inference & visualization
+  dataset.py            # Dataset loading & augmentation
+  image_pool.py         # Image buffer for training stability
+  model/                # Pre-trained weights
 ```
-
-## Architecture
-
-- **Generator**: ResNet-based with 9 residual blocks, Class Activation Mapping (CAM), spectral normalization
-- **Discriminator**: PatchGAN with CAM
-- **Loss**: Adversarial (BCE) + Cycle consistency (L1) + Identity (L1)
