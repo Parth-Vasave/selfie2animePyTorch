@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>cycle_gan</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  </head>
+  <body>
+    <div id="app">
+      <p>
+        <span>repository: </span>
+        <a href="https://github.com/ufownl/cycle_gan">https://github.com/ufownl/cycle_gan</a>
+      </p>
+      <p>
+        <label for="server">server</label>
+        <input v-model="server" type="text" id="server" />
+      </p>
+      <p>
+        <div>
+          <input type="file" accept="image/*" @change="chooseImage" :disabled="processing" />
+          <button @click="run" :disabled="processing">Run</button>
+        </div>
+      </p>
+      <canvas ref="real" :width="realWidth" :height="realHeight"></canvas>
+      <div>{{ message }}</div>
+      <div v-if="!processing && fake">
+        <img :src="fake" alt="fake image" />
+      </div>
+    </div>
+  </body>
+  <script src="https://cdn.jsdelivr.net/npm/vue@2.6.10"></script>
+  <script type="text/javascript">
+    function get_param(name) {
+      let reg = new RegExp('(^|&)' + name + '=([^&]*)(&|$)')
+      let r = window.location.search.substr(1).match(reg)
+      if (r != null) {
+        return unescape(r[2])
+      }
+      return null
+    }
+
+    let server = get_param('server')
+    new Vue({
+      el: '#app',
+      data: {
+        server: server ? server : 'http://localhost',
+        real: undefined,
+        message: '',
+        processing: false,
+        rawFake: undefined
+      },
+      computed: {
+        realWidth() {
+          if (this.real) {
+            return this.real.width
+          } else {
+            return 0
+          }
+        },
+        realHeight() {
+          if (this.real) {
+            return this.real.height
+          } else {
+            return 0
+          }
+        },
+        fake() {
+          if (this.rawFake) {
+            return URL.createObjectURL(this.rawFake)
+          } else {
+            return undefined
+          }
+        }
+      },
+      methods: {
+        chooseImage(e) {
+          let file = e.target.files[0]
+          if (file) {
+            this.rawFake = undefined
+            let img = new Image()
+            img.onload = () => {
+              this.real = img
+              this.$nextTick(() => {
+                let context = this.$refs.real.getContext('2d')
+                context.drawImage(img, 0, 0)
+              })
+            }
+            img.src = URL.createObjectURL(file)
+          }
+        },
+        run() {
+          if (!this.real) {
+            this.message = 'Please select an image file!'
+            return
+          }
+          this.message = 'Uploading and processing...'
+          this.processing = true
+          this.$refs.real.toBlob(blob => {
+            let form = new FormData()
+            form.append('real', blob)
+            let url = encodeURI(this.server + '/cycle_gan/fake')
+            let xhr = new XMLHttpRequest()
+            xhr.responseType = "blob"
+            xhr.open('POST', url, true)
+            xhr.onload = () => {
+              if (xhr.readyState !== 4) {
+                return
+              }
+              this.processing = false
+              if (xhr.status !== 200) {
+                this.message = 'ERROR: HTTP status code (' + xhr.status + ')'
+                return
+              }
+              this.message = ''
+              this.rawFake = xhr.response
+            }
+            xhr.onerror = () => {
+              this.message = 'ERROR: Failed to call "' + url + '"'
+              this.processing = false
+            }
+            xhr.send(form)
+          })
+        }
+      }
+    })
+  </script>
+</html>

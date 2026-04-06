@@ -1,0 +1,31 @@
+# MXNet original weights (keep only .pth)
+*.params
+
+# Environments
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Data
+data/
+*.zip
+
+# macOS
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# Outputs
+*.out
+*.bak
+*.ckpt
+*.state
