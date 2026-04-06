@@ -63,78 +63,75 @@ def parse_mxnet_params(filepath):
 
 
 def convert(mxnet_params_path, output_path):
-    """Convert MXNet params to PyTorch state dict (without spectral norm)."""
+    """Convert MXNet params to PyTorch state dict WITH spectral norm.
+
+    Uses PyTorch's spectral_norm so sigma is computed dynamically during
+    forward, exactly matching MXNet's behavior.
+    """
     mx_params = parse_mxnet_params(mxnet_params_path)
 
     print(f"Loaded {len(mx_params)} MXNet parameters")
     for k, v in mx_params.items():
         print(f"  {k}: {v.shape}")
 
-    # Build model WITHOUT spectral norm for inference.
-    # MXNet's _weight is the raw weight, and spectral norm state (u/v vectors)
-    # doesn't transfer cleanly between frameworks. For inference this is fine —
-    # spectral norm is a training regularizer and doesn't affect inference quality.
-    model = ResnetGenerator(use_spectral_norm=False)
+    # Build model WITH spectral norm (default)
+    model = ResnetGenerator(use_spectral_norm=True)
     target_sd = model.state_dict()
 
-    # Collect weights and u vectors separately, then normalize
-    raw_weights = {}  # base_key -> weight tensor
-    u_vectors = {}    # base_key -> u tensor (1, out_channels)
-    new_sd = {}
+    # Collect MXNet params by type
+    raw_weights = {}
+    u_vectors = {}
+    cam_params = {}
 
     for mx_key, mx_arr in mx_params.items():
-        # Strip leading underscore
-        clean = mx_key.lstrip('_')
-        # Replace ._net. with .net.
-        clean = clean.replace('._net.', '.net.')
+        clean = mx_key.lstrip('_').replace('._net.', '.net.')
 
         if clean.endswith('._u'):
-            base = clean[:-3]  # remove ._u
-            u_vectors[base] = torch.from_numpy(mx_arr)  # keep as (1, N)
+            base = clean[:-3]
+            u_vectors[base] = torch.from_numpy(mx_arr)
         elif clean.endswith('._weight'):
-            base = clean[:-8]  # remove ._weight
+            base = clean[:-8]
             raw_weights[base] = torch.from_numpy(mx_arr)
         else:
-            # CAM layers: cam._gap_linear.weight -> cam.gap_linear.weight
             clean = clean.replace('._', '.')
-            new_sd[clean] = torch.from_numpy(mx_arr)
+            cam_params[clean] = torch.from_numpy(mx_arr)
 
-    # Apply spectral normalization: W_normalized = W / sigma
-    # MXNet stores the raw (unnormalized) weight and u vector.
-    # MXNet's forward does exactly 1 power iteration step using the saved u,
-    # so we replicate that here to bake the normalization into the weight.
-    print("\nApplying spectral normalization to weights...")
-    for base_key in raw_weights:
-        weight = raw_weights[base_key]
+    # Build PyTorch state dict
+    new_sd = dict(cam_params)
+
+    print("\nMapping weights with spectral norm...")
+    for base_key, weight in raw_weights.items():
+        new_sd[base_key + '.weight_orig'] = weight
+
         if base_key in u_vectors:
-            u = u_vectors[base_key]  # (1, out_channels)
-            w_mat = weight.reshape(weight.shape[0], -1)  # (out, in*k*k)
-            # MXNet 1-step power iteration:
-            # v = L2Norm(u @ W)
-            v = torch.mm(u, w_mat)
+            u_mx = u_vectors[base_key]  # (1, out_channels)
+            u = u_mx.flatten()  # (out_channels,)
+
+            # Compute v with 1 power iteration step (matching MXNet)
+            w_mat = weight.reshape(weight.shape[0], -1)
+            v = torch.mv(w_mat.t(), u)
             v = v / v.norm()
-            # u_new = L2Norm(v @ W^T)
-            u_new = torch.mm(v, w_mat.t())
-            u_new = u_new / u_new.norm()
-            # sigma = sum(u_new @ W * v)
-            sigma = torch.sum(torch.mm(u_new, w_mat) * v)
-            weight = weight / sigma
+            # Re-derive u for consistency
+            u = torch.mv(w_mat, v)
+            u = u / u.norm()
+
+            new_sd[base_key + '.weight_u'] = u
+            new_sd[base_key + '.weight_v'] = v
+
+            sigma = torch.dot(u, torch.mv(w_mat, v))
             print(f"  {base_key}: sigma={sigma.item():.4f}")
-        new_sd[base_key + '.weight'] = weight
 
     # Verify all keys match
     missing = set(target_sd.keys()) - set(new_sd.keys())
     extra = set(new_sd.keys()) - set(target_sd.keys())
     if missing:
-        print(f"\nMISSING keys in converted weights: {missing}")
+        print(f"\nMISSING keys: {missing}")
     if extra:
-        print(f"\nEXTRA keys not in model: {extra}")
+        print(f"\nEXTRA keys: {extra}")
 
-    # Shape check
     for k in new_sd:
-        if k in target_sd:
-            if new_sd[k].shape != target_sd[k].shape:
-                print(f"  SHAPE MISMATCH: {k}: converted {new_sd[k].shape} vs expected {target_sd[k].shape}")
+        if k in target_sd and new_sd[k].shape != target_sd[k].shape:
+            print(f"  SHAPE MISMATCH: {k}: {new_sd[k].shape} vs {target_sd[k].shape}")
 
     torch.save(new_sd, output_path)
     print(f"\nSaved PyTorch weights to {output_path}")
@@ -146,6 +143,7 @@ def convert(mxnet_params_path, output_path):
         dummy = torch.randn(1, 3, 256, 256)
         out, cam_out = model(dummy)
         print(f"Validation: input {dummy.shape} -> output {out.shape}, cam {cam_out.shape}")
+        print(f"Output range: [{out.min():.4f}, {out.max():.4f}], mean={out.mean():.4f}, std={out.std():.4f}")
     print("Conversion successful!")
 
 
