@@ -114,7 +114,7 @@ if __name__ == "__main__":
         CycleGAN.device = torch.device("cpu")
 
     print("Loading model...", flush=True)
-    CycleGAN.net = ResnetGenerator().to(CycleGAN.device)
+    CycleGAN.net = ResnetGenerator(use_spectral_norm=False).to(CycleGAN.device)
     if args.reversed:
         CycleGAN.net.load_state_dict(torch.load("model/{}.gen_ba.pth".format(args.model), map_location=CycleGAN.device, weights_only=True))
     else:

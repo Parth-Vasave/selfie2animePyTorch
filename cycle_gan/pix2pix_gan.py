@@ -22,19 +22,22 @@ import torch.nn.functional as F
 from torch.nn.utils import spectral_norm
 
 
-def sn_conv2d(in_channels, out_channels, kernel_size, stride=1, padding=0):
-    return spectral_norm(nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, bias=False))
+def sn_conv2d(in_channels, out_channels, kernel_size, stride=1, padding=0, use_spectral_norm=True):
+    conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, bias=False)
+    if use_spectral_norm:
+        return spectral_norm(conv)
+    return conv
 
 
 class ResBlock(nn.Module):
-    def __init__(self, filters):
+    def __init__(self, filters, use_spectral_norm=True):
         super().__init__()
         self.net = nn.Sequential(
             nn.ReflectionPad2d(1),
-            sn_conv2d(filters, filters, 3, 1, 0),
+            sn_conv2d(filters, filters, 3, 1, 0, use_spectral_norm),
             nn.ReLU(inplace=True),
             nn.ReflectionPad2d(1),
-            sn_conv2d(filters, filters, 3, 1, 0),
+            sn_conv2d(filters, filters, 3, 1, 0, use_spectral_norm),
         )
 
     def forward(self, x):
@@ -60,21 +63,22 @@ class ClassActivationMapping(nn.Module):
 
 
 class ResnetGenerator(nn.Module):
-    def __init__(self, channels=3, filters=64, res_blocks=9, downsample_layers=2):
+    def __init__(self, channels=3, filters=64, res_blocks=9, downsample_layers=2, use_spectral_norm=True):
         super().__init__()
+        sn = use_spectral_norm
         enc_layers = [
             nn.ReflectionPad2d(3),
-            sn_conv2d(channels, filters, 7, 1, 0),
+            sn_conv2d(channels, filters, 7, 1, 0, sn),
             nn.ReLU(inplace=True),
         ]
         for i in range(downsample_layers):
             enc_layers += [
-                sn_conv2d(2 ** i * filters, 2 ** (i + 1) * filters, 3, 2, 1),
+                sn_conv2d(2 ** i * filters, 2 ** (i + 1) * filters, 3, 2, 1, sn),
                 nn.ReLU(inplace=True),
             ]
         units = 2 ** downsample_layers * filters
         for _ in range(res_blocks):
-            enc_layers.append(ResBlock(units))
+            enc_layers.append(ResBlock(units, sn))
         self.enc = nn.Sequential(*enc_layers)
 
         self.cam = ClassActivationMapping(units, units, nn.ReLU(inplace=True))
@@ -85,12 +89,12 @@ class ResnetGenerator(nn.Module):
             out_ch = 2 ** (downsample_layers - i - 1) * filters
             dec_layers += [
                 nn.Upsample(scale_factor=2, mode='nearest'),
-                sn_conv2d(in_ch, out_ch, 3, 1, 1),
+                sn_conv2d(in_ch, out_ch, 3, 1, 1, sn),
                 nn.ReLU(inplace=True),
             ]
         dec_layers += [
             nn.ReflectionPad2d(3),
-            sn_conv2d(filters, channels, 7, 1, 0),
+            sn_conv2d(filters, channels, 7, 1, 0, sn),
             nn.Tanh(),
         ]
         self.dec = nn.Sequential(*dec_layers)
@@ -101,27 +105,28 @@ class ResnetGenerator(nn.Module):
 
 
 class PatchDiscriminator(nn.Module):
-    def __init__(self, channels=3, filters=64, layers=3):
+    def __init__(self, channels=3, filters=64, layers=3, use_spectral_norm=True):
         super().__init__()
+        sn = use_spectral_norm
         enc_layers = [
-            sn_conv2d(channels, filters, 4, 2, 1),
+            sn_conv2d(channels, filters, 4, 2, 1, sn),
             nn.LeakyReLU(0.2, inplace=True),
         ]
         for i in range(1, layers):
             in_ch = min(2 ** (i - 1), 8) * filters
             out_ch = min(2 ** i, 8) * filters
             enc_layers += [
-                sn_conv2d(in_ch, out_ch, 4, 2, 1),
+                sn_conv2d(in_ch, out_ch, 4, 2, 1, sn),
                 nn.LeakyReLU(0.2, inplace=True),
             ]
         units = min(2 ** layers, 8) * filters
         enc_layers += [
-            sn_conv2d(min(2 ** (layers - 1), 8) * filters, units, 4, 1, 1),
+            sn_conv2d(min(2 ** (layers - 1), 8) * filters, units, 4, 1, 1, sn),
             nn.LeakyReLU(0.2, inplace=True),
         ]
         self.enc = nn.Sequential(*enc_layers)
         self.cam = ClassActivationMapping(units, units, nn.LeakyReLU(0.2, inplace=True))
-        self.dec = sn_conv2d(units, 1, 4, 1, 1)
+        self.dec = sn_conv2d(units, 1, 4, 1, 1, sn)
 
     def forward(self, x):
         x, y = self.cam(self.enc(x))
